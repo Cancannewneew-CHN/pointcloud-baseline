@@ -14,43 +14,73 @@ PipelineStep parse_step(const std::string& step_name) {
     if (step_name == "voxel") {
         return PipelineStep::Voxel;
     }
-    if (step_name == "statistical" || step_name == "sor") {
-        return PipelineStep::Statistical;
-    }
     if (step_name == "diff") {
         return PipelineStep::Diff;
+    }
+    if (step_name == "sor" || step_name == "statistical") {
+        return PipelineStep::Sor;
+    }
+    if (step_name == "cluster") {
+        return PipelineStep::Cluster;
     }
     if (step_name == "all") {
         return PipelineStep::All;
     }
-    return PipelineStep::Roi;
+    return PipelineStep::All;
+}
+
+const char* step_label(PipelineStep step) {
+    switch (step) {
+        case PipelineStep::Roi:
+            return "ROI 裁剪";
+        case PipelineStep::Voxel:
+            return "ROI + 体素下采样";
+        case PipelineStep::Diff:
+            return "ROI + 体素 + 差分分割";
+        case PipelineStep::Sor:
+            return "ROI + 体素 + 差分 + 统计滤波";
+        case PipelineStep::Cluster:
+            return "ROI + 体素 + 差分 + 统计滤波 + 聚类去游离点";
+        case PipelineStep::All:
+        default:
+            return "完整 Pipeline";
+    }
 }
 
 void print_usage(const char* program) {
     std::cout
         << "用法:\n"
-        << "  " << program
-        << " [--step roi|voxel|statistical|diff|all] [--env path] [--scene path] [--output dir]\n\n"
-        << "默认仅测试 ROI 裁剪 (step=roi)\n\n"
-        << "示例:\n"
-        << "  " << program << " --step roi\n"
-        << "  " << program << " --step all --env data/env.ply --scene data/scene.ply\n";
+        << "  " << program << " [选项]\n\n"
+        << "流程顺序: ROI -> 体素下采样 -> 差分分割 -> 统计滤波 -> 聚类去游离点\n\n"
+        << "选项:\n"
+        << "  --step <roi|voxel|diff|sor|cluster|all>  运行到哪一步 (默认 all)\n"
+        << "  --env <path>            空环境点云 (默认 data/origin-only-environment.ply)\n"
+        << "  --scene <path>          含工件点云 (默认 data/raw_subass_workpiece.ply)\n"
+        << "  --output <dir>          输出目录 (默认 output/baseline)\n"
+        << "  --voxel <mm>            体素边长\n"
+        << "  --nb-neighbors <n>      统计滤波 kNN 邻居数\n"
+        << "  --std-ratio <r>         统计滤波标准差倍数阈值\n"
+        << "  --diff-threshold <mm>   差分最近邻距离阈值\n"
+        << "  --cluster-radius <mm>   聚类邻接半径\n"
+        << "  --min-cluster-size <n>  小于该点数的簇视为游离噪声删除\n"
+        << "  --roi <xmin xmax ymin ymax zmin zmax>  ROI 包围盒 (mm)\n";
 }
 
 PipelineConfig default_config() {
     PipelineConfig config{};
     // 基于 origin-only-environment.ply 工作台层分析 (单位: mm)
-    // env 工作台 z[-120,-20] 的 5-95% 分位 + 边距
     config.roi.x_min = -176.4f;
     config.roi.x_max = 1164.9f;
     config.roi.y_min = -111.2f;
     config.roi.y_max = 960.7f;
     config.roi.z_min = -150.0f;
     config.roi.z_max = 100.0f;
-    config.voxel_size = 1.0f;      // 2mm 会丢失约一半工件点，改为 1mm
+    config.voxel_size = 1.0f;
     config.nb_neighbors = 15;
-    config.std_ratio = 4.0f;       // 宽松统计滤波，避免误删稀疏工件
+    config.std_ratio = 4.0f;
     config.diff_threshold = 3.0f;
+    config.cluster_radius = 3.0f;
+    config.min_cluster_size = 100;
     return config;
 }
 
@@ -60,7 +90,8 @@ int main(int argc, char** argv) {
     std::string env_path = "data/origin-only-environment.ply";
     std::string scene_path = "data/raw_subass_workpiece.ply";
     std::string output_dir = "output/baseline";
-    PipelineStep step = PipelineStep::Roi;
+    PipelineStep step = PipelineStep::All;
+    PipelineConfig config = default_config();
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -70,24 +101,36 @@ int main(int argc, char** argv) {
         }
         if (arg == "--step" && i + 1 < argc) {
             step = parse_step(argv[++i]);
-            continue;
-        }
-        if (arg == "--env" && i + 1 < argc) {
+        } else if (arg == "--env" && i + 1 < argc) {
             env_path = argv[++i];
-            continue;
-        }
-        if (arg == "--scene" && i + 1 < argc) {
+        } else if (arg == "--scene" && i + 1 < argc) {
             scene_path = argv[++i];
-            continue;
-        }
-        if (arg == "--output" && i + 1 < argc) {
+        } else if (arg == "--output" && i + 1 < argc) {
             output_dir = argv[++i];
-            continue;
+        } else if (arg == "--voxel" && i + 1 < argc) {
+            config.voxel_size = std::stof(argv[++i]);
+        } else if (arg == "--nb-neighbors" && i + 1 < argc) {
+            config.nb_neighbors = std::stoi(argv[++i]);
+        } else if (arg == "--std-ratio" && i + 1 < argc) {
+            config.std_ratio = std::stof(argv[++i]);
+        } else if (arg == "--diff-threshold" && i + 1 < argc) {
+            config.diff_threshold = std::stof(argv[++i]);
+        } else if (arg == "--cluster-radius" && i + 1 < argc) {
+            config.cluster_radius = std::stof(argv[++i]);
+        } else if (arg == "--min-cluster-size" && i + 1 < argc) {
+            config.min_cluster_size = std::stoi(argv[++i]);
+        } else if (arg == "--roi" && i + 6 < argc) {
+            config.roi.x_min = std::stof(argv[++i]);
+            config.roi.x_max = std::stof(argv[++i]);
+            config.roi.y_min = std::stof(argv[++i]);
+            config.roi.y_max = std::stof(argv[++i]);
+            config.roi.z_min = std::stof(argv[++i]);
+            config.roi.z_max = std::stof(argv[++i]);
+        } else {
+            std::cerr << "未知或参数不全: " << arg << "\n";
+            print_usage(argv[0]);
+            return 1;
         }
-
-        std::cerr << "未知参数: " << arg << "\n";
-        print_usage(argv[0]);
-        return 1;
     }
 
     PointCloud env;
@@ -101,37 +144,20 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const PipelineConfig config = default_config();
-
     std::cout << "=== Baseline 点云预处理 ===\n";
     std::cout << "环境点云: " << env_path << " (" << env.size() << " points)\n";
     std::cout << "场景点云: " << scene_path << " (" << scene.size() << " points)\n";
-    std::cout << "当前测试步骤: ";
-    switch (step) {
-        case PipelineStep::Roi:
-            std::cout << "ROI 裁剪\n";
-            break;
-        case PipelineStep::Voxel:
-            std::cout << "ROI + 体素下采样\n";
-            break;
-        case PipelineStep::Statistical:
-            std::cout << "ROI + 体素 + 统计滤波\n";
-            break;
-        case PipelineStep::Diff:
-            std::cout << "ROI + 体素 + 统计滤波 + 差分分割\n";
-            break;
-        case PipelineStep::All:
-            std::cout << "完整 Pipeline\n";
-            break;
-    }
-
+    std::cout << "当前测试步骤: " << step_label(step) << "\n";
     std::cout << "ROI 范围 (mm): x[" << config.roi.x_min << ", " << config.roi.x_max << "], y["
               << config.roi.y_min << ", " << config.roi.y_max << "], z[" << config.roi.z_min
               << ", " << config.roi.z_max << "]\n";
+    std::cout << "参数: voxel=" << config.voxel_size << " nb=" << config.nb_neighbors
+              << " std_ratio=" << config.std_ratio << " diff=" << config.diff_threshold
+              << " cluster_r=" << config.cluster_radius
+              << " min_cluster=" << config.min_cluster_size << "\n";
 
     const PipelineResult result = run_pipeline(env, scene, config, step);
 
-    std::cout << "\n原始点数: env=" << env.size() << ", scene=" << scene.size() << "\n";
     print_stats(result, step, env.size(), scene.size());
 
     if (!save_step_outputs(output_dir, result, step)) {
@@ -140,17 +166,6 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\n输出目录: " << output_dir << "\n";
-
-    if (step == PipelineStep::Roi) {
-        const std::size_t env_removed = env.size() - result.env_roi.size();
-        const std::size_t scene_removed = scene.size() - result.scene_roi.size();
-        std::cout << "\n[ROI 验证]\n";
-        std::cout << "  env  裁剪掉 " << env_removed << " 点, 保留 " << result.env_roi.size()
-                  << " 点\n";
-        std::cout << "  scene裁剪掉 " << scene_removed << " 点, 保留 " << result.scene_roi.size()
-                  << " 点\n";
-        std::cout << "  输出文件: env_roi.ply, scene_roi.ply\n";
-    }
 
     return 0;
 }

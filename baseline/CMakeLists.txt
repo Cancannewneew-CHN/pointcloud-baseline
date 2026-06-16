@@ -5,18 +5,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(baseline
-    main.cpp
-    src/ply_io.cpp
-    src/roi_crop.cpp
-    src/voxel_downsample.cpp
-    src/statistical_filter.cpp
-    src/diff_segmentation.cpp
-    src/pipeline.cpp
-)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+file(GLOB BASELINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+add_executable(baseline main.cpp ${BASELINE_SOURCES})
 
 target_include_directories(baseline PRIVATE include)
 
+find_package(Threads REQUIRED)
+target_link_libraries(baseline PRIVATE Threads::Threads)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(baseline PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(baseline PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()

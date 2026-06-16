@@ -2,8 +2,10 @@
 
 #include "kdtree.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -45,9 +47,39 @@ StepStats statistical_outlier_removal(const PointCloud& input,
     KdTree tree;
     tree.build(input);
 
+    // kNN 查询彼此独立且 KD-tree 只读,按点区间切分多线程并行。
     std::vector<float> mean_distances(input.size(), 0.0f);
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        mean_distances[i] = tree.mean_knn_distance(input[i], nb_neighbors, i);
+    const std::size_t n = input.size();
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 1;
+    }
+    const std::size_t num_threads =
+        std::min<std::size_t>(hw, n == 0 ? 1 : n);
+
+    auto worker = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            mean_distances[i] = tree.mean_knn_distance(input[i], nb_neighbors, i);
+        }
+    };
+
+    if (num_threads <= 1) {
+        worker(0, n);
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(num_threads);
+        const std::size_t chunk = (n + num_threads - 1) / num_threads;
+        for (std::size_t t = 0; t < num_threads; ++t) {
+            const std::size_t begin = t * chunk;
+            const std::size_t end = std::min(begin + chunk, n);
+            if (begin >= end) {
+                break;
+            }
+            pool.emplace_back(worker, begin, end);
+        }
+        for (auto& thread : pool) {
+            thread.join();
+        }
     }
 
     const float mu = compute_mean(mean_distances);

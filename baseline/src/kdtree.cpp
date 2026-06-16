@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
-#include <vector>
 
 namespace {
 
@@ -79,9 +77,7 @@ void KdTree::search_nearest(int node_index,
     }
 
     const int axis = node.axis;
-    const float query_axis = axis_value(query, axis);
-    const float node_axis = axis_value(node.point, axis);
-    const float diff = query_axis - node_axis;
+    const float diff = axis_value(query, axis) - axis_value(node.point, axis);
     const float diff_sq = diff * diff;
 
     const int near_child = diff < 0.0f ? node.left : node.right;
@@ -100,46 +96,38 @@ Point3D KdTree::nearest_neighbor(const Point3D& query) const {
     return best_point;
 }
 
+// 用大小固定为 k 的最大堆维护当前最近的 k 个平方距离,堆顶即第 k 近距离,
+// 用它做剪枝,避免每个节点都全量扫描距离向量。
 void KdTree::search_knn(int node_index,
                         const Point3D& query,
                         int k,
                         std::size_t self_index,
-                        std::vector<float>& distances) const {
-    if (node_index < 0 || k <= 0) {
+                        std::priority_queue<float>& heap) const {
+    if (node_index < 0) {
         return;
     }
 
     const Node& node = nodes_[node_index];
     if (static_cast<std::size_t>(node.index) != self_index) {
-        distances.push_back(std::sqrt(squared_distance(query, node.point)));
+        const float dist_sq = squared_distance(query, node.point);
+        if (static_cast<int>(heap.size()) < k) {
+            heap.push(dist_sq);
+        } else if (dist_sq < heap.top()) {
+            heap.pop();
+            heap.push(dist_sq);
+        }
     }
-
-    const int target_count = (self_index == static_cast<std::size_t>(-1)) ? k : k + 1;
-    if (static_cast<int>(distances.size()) > target_count) {
-        std::nth_element(distances.begin(),
-                         distances.begin() + target_count,
-                         distances.end());
-        distances.resize(static_cast<std::size_t>(target_count));
-    }
-
-    float worst = distances.empty() ? std::numeric_limits<float>::max()
-                                    : *std::max_element(distances.begin(), distances.end());
 
     const int axis = node.axis;
-    const float query_axis = axis_value(query, axis);
-    const float node_axis = axis_value(node.point, axis);
-    const float diff = query_axis - node_axis;
+    const float diff = axis_value(query, axis) - axis_value(node.point, axis);
     const float diff_sq = diff * diff;
 
     const int near_child = diff < 0.0f ? node.left : node.right;
     const int far_child = diff < 0.0f ? node.right : node.left;
 
-    search_knn(near_child, query, k, self_index, distances);
-    if (static_cast<int>(distances.size()) >= target_count) {
-        worst = *std::max_element(distances.begin(), distances.end());
-    }
-    if (diff_sq < worst * worst || static_cast<int>(distances.size()) < k) {
-        search_knn(far_child, query, k, self_index, distances);
+    search_knn(near_child, query, k, self_index, heap);
+    if (static_cast<int>(heap.size()) < k || diff_sq < heap.top()) {
+        search_knn(far_child, query, k, self_index, heap);
     }
 }
 
@@ -148,23 +136,51 @@ float KdTree::mean_knn_distance(const Point3D& query, int k, std::size_t self_in
         return 0.0f;
     }
 
-    std::vector<float> distances;
-    distances.reserve(static_cast<std::size_t>(k + 1));
-    search_knn(root_, query, k, self_index, distances);
+    std::priority_queue<float> heap;  // 最大堆,存平方距离
+    search_knn(root_, query, k, self_index, heap);
 
-    if (static_cast<std::size_t>(self_index) != static_cast<std::size_t>(-1) &&
-        static_cast<int>(distances.size()) > k) {
-        std::nth_element(distances.begin(), distances.begin() + k, distances.end());
-        distances.resize(static_cast<std::size_t>(k));
-    } else if (static_cast<int>(distances.size()) > k) {
-        std::nth_element(distances.begin(), distances.begin() + k, distances.end());
-        distances.resize(static_cast<std::size_t>(k));
-    }
-
-    if (distances.empty()) {
+    if (heap.empty()) {
         return 0.0f;
     }
 
-    const float sum = std::accumulate(distances.begin(), distances.end(), 0.0f);
-    return sum / static_cast<float>(distances.size());
+    const int count = static_cast<int>(heap.size());
+    float sum = 0.0f;
+    while (!heap.empty()) {
+        sum += std::sqrt(heap.top());
+        heap.pop();
+    }
+    return sum / static_cast<float>(count);
+}
+
+void KdTree::search_radius(int node_index,
+                           const Point3D& query,
+                           float radius_sq,
+                           std::vector<int>& out_indices) const {
+    if (node_index < 0) {
+        return;
+    }
+
+    const Node& node = nodes_[node_index];
+    if (squared_distance(query, node.point) <= radius_sq) {
+        out_indices.push_back(node.index);
+    }
+
+    const int axis = node.axis;
+    const float diff = axis_value(query, axis) - axis_value(node.point, axis);
+
+    const int near_child = diff < 0.0f ? node.left : node.right;
+    const int far_child = diff < 0.0f ? node.right : node.left;
+
+    search_radius(near_child, query, radius_sq, out_indices);
+    if (diff * diff <= radius_sq) {
+        search_radius(far_child, query, radius_sq, out_indices);
+    }
+}
+
+void KdTree::radius_search(const Point3D& query, float radius, std::vector<int>& out_indices) const {
+    out_indices.clear();
+    if (root_ < 0) {
+        return;
+    }
+    search_radius(root_, query, radius * radius, out_indices);
 }
