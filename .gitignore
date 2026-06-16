@@ -1,0 +1,25 @@
+# 大文件 / 原始数据 / 运行生成结果(不纳入版本控制)
+data/
+output/
+code/
+
+# 其他课程材料:file/ 仅保留点云预处理规划文档
+file/*
+!file/点云预处理调研以及路线规划.md
+
+# C++ 构建产物
+baseline/build/
+baseline/baseline
+*.o
+*.obj
+*.out
+*.exe
+*.app
+*.dSYM/
+
+# macOS
+.DS_Store
+
+# 编辑器临时文件
+*.swp
+*~

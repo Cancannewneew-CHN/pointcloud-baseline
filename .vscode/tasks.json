@@ -1,0 +1,56 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "baseline: build",
+            "command": "clang++",
+            "args": [
+                "-std=c++17",
+                "-Wall",
+                "-Wextra",
+                "-g",
+                "-Iinclude",
+                "main.cpp",
+                "src/ply_io.cpp",
+                "src/roi_crop.cpp",
+                "src/voxel_downsample.cpp",
+                "src/statistical_filter.cpp",
+                "src/diff_segmentation.cpp",
+                "src/pipeline.cpp",
+                "-o",
+                "baseline"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/baseline"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "type": "shell",
+            "label": "baseline: test ROI",
+            "dependsOn": "baseline: build",
+            "command": "${workspaceFolder}/baseline/baseline",
+            "args": ["--step", "roi"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "type": "shell",
+            "label": "baseline: generate test data",
+            "command": "python3",
+            "args": ["${workspaceFolder}/scripts/generate_test_data.py"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
