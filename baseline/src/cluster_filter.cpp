@@ -2,6 +2,7 @@
 
 #include "kdtree.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <vector>
@@ -9,16 +10,15 @@
 StepStats euclidean_cluster_filter(const PointCloud& input,
                                    float radius,
                                    int min_cluster_size,
+                                   int keep_largest,
                                    PointCloud& output) {
     const auto start = std::chrono::steady_clock::now();
 
     output.clear();
 
-    if (input.empty() || min_cluster_size <= 1) {
-        output = input;
+    if (input.empty()) {
         const auto end = std::chrono::steady_clock::now();
         StepStats stats{};
-        stats.point_count = output.size();
         stats.elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
         return stats;
     }
@@ -26,42 +26,67 @@ StepStats euclidean_cluster_filter(const PointCloud& input,
     KdTree tree;
     tree.build(input);
 
-    std::vector<std::uint8_t> visited(input.size(), 0);
+    // 区域生长:为每个点分配簇标签。
+    std::vector<int> label(input.size(), -1);
     std::vector<int> queue;
-    std::vector<int> cluster;
     std::vector<int> neighbors;
-
-    output.reserve(input.size());
+    std::vector<std::vector<int>> clusters;
 
     for (std::size_t seed = 0; seed < input.size(); ++seed) {
-        if (visited[seed]) {
+        if (label[seed] != -1) {
             continue;
         }
 
-        // 区域生长:从 seed 出发,BFS 收集半径连通的所有点。
+        const int cluster_id = static_cast<int>(clusters.size());
+        clusters.emplace_back();
+        std::vector<int>& members = clusters.back();
+
         queue.clear();
-        cluster.clear();
         queue.push_back(static_cast<int>(seed));
-        visited[seed] = 1;
+        label[seed] = cluster_id;
 
         std::size_t head = 0;
         while (head < queue.size()) {
             const int current = queue[head++];
-            cluster.push_back(current);
+            members.push_back(current);
 
             tree.radius_search(input[current], radius, neighbors);
             for (const int n : neighbors) {
-                if (!visited[n]) {
-                    visited[n] = 1;
+                if (label[n] == -1) {
+                    label[n] = cluster_id;
                     queue.push_back(n);
                 }
             }
         }
+    }
 
-        if (static_cast<int>(cluster.size()) >= min_cluster_size) {
-            for (const int idx : cluster) {
-                output.push_back(input[idx]);
+    // 决定保留哪些簇。
+    std::vector<int> kept_ids;
+    if (keep_largest >= 1) {
+        std::vector<int> order(clusters.size());
+        for (std::size_t i = 0; i < clusters.size(); ++i) {
+            order[i] = static_cast<int>(i);
+        }
+        std::sort(order.begin(), order.end(), [&clusters](int a, int b) {
+            return clusters[a].size() > clusters[b].size();
+        });
+        const std::size_t n_keep =
+            std::min<std::size_t>(static_cast<std::size_t>(keep_largest), order.size());
+        for (std::size_t i = 0; i < n_keep; ++i) {
+            kept_ids.push_back(order[i]);
+        }
+    } else {
+        for (std::size_t i = 0; i < clusters.size(); ++i) {
+            if (static_cast<int>(clusters[i].size()) >= min_cluster_size) {
+                kept_ids.push_back(static_cast<int>(i));
             }
+        }
+    }
+
+    output.reserve(input.size());
+    for (const int id : kept_ids) {
+        for (const int idx : clusters[id]) {
+            output.push_back(input[idx]);
         }
     }
 

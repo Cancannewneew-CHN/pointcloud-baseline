@@ -103,7 +103,7 @@ PipelineResult run_pipeline(const PointCloud& env,
     // Step 5: 欧氏聚类去游离点(删除零散小簇)
     result.cluster_stats = euclidean_cluster_filter(
         result.workpiece_sor, config.cluster_radius, config.min_cluster_size,
-        result.workpiece_clean);
+        config.keep_largest, result.workpiece_clean);
 
     return result;
 }

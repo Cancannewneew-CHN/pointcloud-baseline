@@ -27,7 +27,8 @@ struct PipelineConfig {
     float std_ratio = 4.0f;
     float diff_threshold = 3.0f;   // mm, 约 3x voxel_size
     float cluster_radius = 3.0f;   // mm, 欧氏聚类邻接半径
-    int min_cluster_size = 100;    // 小于此点数的簇视为游离噪声并删除
+    int min_cluster_size = 100;    // keep_largest<=0 时: 小于此点数的簇视为游离噪声并删除
+    int keep_largest = 1;          // >=1 时: 仅保留最大的该数目个簇(去除远处独立条带)
 };
 
 struct StepStats {

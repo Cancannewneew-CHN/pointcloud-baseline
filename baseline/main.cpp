@@ -62,7 +62,8 @@ void print_usage(const char* program) {
         << "  --std-ratio <r>         统计滤波标准差倍数阈值\n"
         << "  --diff-threshold <mm>   差分最近邻距离阈值\n"
         << "  --cluster-radius <mm>   聚类邻接半径\n"
-        << "  --min-cluster-size <n>  小于该点数的簇视为游离噪声删除\n"
+        << "  --min-cluster-size <n>  仅在 --keep-largest 0 时生效:删除小于该点数的簇\n"
+        << "  --keep-largest <n>      仅保留最大的 n 个簇 (默认 1; 设 0 则用 min-cluster-size)\n"
         << "  --roi <xmin xmax ymin ymax zmin zmax>  ROI 包围盒 (mm)\n";
 }
 
@@ -81,6 +82,7 @@ PipelineConfig default_config() {
     config.diff_threshold = 3.0f;
     config.cluster_radius = 3.0f;
     config.min_cluster_size = 100;
+    config.keep_largest = 1;
     return config;
 }
 
@@ -119,6 +121,8 @@ int main(int argc, char** argv) {
             config.cluster_radius = std::stof(argv[++i]);
         } else if (arg == "--min-cluster-size" && i + 1 < argc) {
             config.min_cluster_size = std::stoi(argv[++i]);
+        } else if (arg == "--keep-largest" && i + 1 < argc) {
+            config.keep_largest = std::stoi(argv[++i]);
         } else if (arg == "--roi" && i + 6 < argc) {
             config.roi.x_min = std::stof(argv[++i]);
             config.roi.x_max = std::stof(argv[++i]);
@@ -154,7 +158,8 @@ int main(int argc, char** argv) {
     std::cout << "参数: voxel=" << config.voxel_size << " nb=" << config.nb_neighbors
               << " std_ratio=" << config.std_ratio << " diff=" << config.diff_threshold
               << " cluster_r=" << config.cluster_radius
-              << " min_cluster=" << config.min_cluster_size << "\n";
+              << " min_cluster=" << config.min_cluster_size
+              << " keep_largest=" << config.keep_largest << "\n";
 
     const PipelineResult result = run_pipeline(env, scene, config, step);
 
