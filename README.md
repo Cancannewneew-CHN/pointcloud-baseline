@@ -4,7 +4,18 @@
 
 从工业 3D 相机采集的原始点云中去除背景与噪声,提取出工件点云,供后续焊缝特征提取使用。
 
-## Pipeline
+## 两条处理分支
+
+根据是否有空环境点云,提供两个可执行程序,后半段流程(体素 → 统计滤波 → 聚类)完全相同,仅背景剔除方式不同:
+
+| 分支 | 程序 | 适用场景 | 背景剔除 | 输入格式 |
+| --- | --- | --- | --- | --- |
+| **A 差分** | `baseline` | 有空环境点云 | 场景点云 − 空环境点云 | PLY |
+| **B 去台面** | `tabletop` | 无环境点云,工件在工作台上 | 去除工作台平面 | PCD / PLY |
+
+> GUI 集成方式见 [`docs/GUI集成接口.md`](docs/GUI集成接口.md),参数详解见 [`docs/参数配置说明.md`](docs/参数配置说明.md)。
+
+## 分支 A:差分方案(`baseline`)
 
 ```
 原始点云 (env / scene)
@@ -36,37 +47,43 @@ baseline/
 ├── include/                 # 头文件
 │   ├── types.hpp            # 点云类型与 PipelineConfig
 │   ├── ply_io.hpp           # PLY 读写(支持 ascii / binary_little_endian)
+│   ├── pcd_io.hpp           # PCD 读取(binary / ascii)
 │   ├── kdtree.hpp           # KD-tree(最近邻 + 有界堆 kNN + 半径搜索)
 │   ├── roi_crop.hpp
 │   ├── voxel_downsample.hpp
-│   ├── diff_segmentation.hpp
+│   ├── diff_segmentation.hpp # 分支 A:差分背景剔除
+│   ├── plane_filter.hpp      # 分支 B:去工作台平面(RANSAC / zcut)
 │   ├── statistical_filter.hpp
 │   ├── cluster_filter.hpp   # 欧氏聚类去游离点
-│   └── pipeline.hpp         # 流程编排
+│   └── pipeline.hpp         # 分支 A 流程编排
 ├── src/                     # 各模块实现(一模块一文件)
-├── main.cpp                 # 命令行入口,支持分步测试
+├── main.cpp                 # 分支 A 入口(差分),支持分步测试
+├── tabletop_main.cpp        # 分支 B 入口(去台面)
 └── CMakeLists.txt
+docs/                        # 设计/参数/GUI 集成文档
 scripts/
-└── generate_test_data.py    # 生成测试用小点云
+├── generate_test_data.py    # 生成测试用小点云
+└── viz_result.py            # 结果点云可视化
 ```
 
 ## 构建
 
-需要 C++17 编译器。
+需要 C++17 编译器。手动编译两个程序:
 
 ```bash
 cd baseline
-clang++ -std=c++17 -O3 -pthread -Iinclude main.cpp src/*.cpp -o baseline
+clang++ -std=c++17 -O3 -pthread -Iinclude main.cpp src/*.cpp -o baseline           # 分支 A
+clang++ -std=c++17 -O3 -pthread -Iinclude tabletop_main.cpp src/*.cpp -o tabletop   # 分支 B
 ```
 
-或使用 CMake:
+或使用 CMake(同时构建 `baseline` 与 `tabletop`):
 
 ```bash
 cd baseline && mkdir -p build && cd build
 cmake .. && cmake --build .
 ```
 
-## 使用
+## 分支 A 使用(差分)
 
 支持逐步测试,`--step` 指定运行到哪一步(默认 `all`):
 
@@ -96,7 +113,7 @@ cmake .. && cmake --build .
 `workpiece_sor.ply`(统计滤波后)、`workpiece_clean.ply`(最终结果),
 可用 CloudCompare / MeshLab 查看。
 
-## 参数
+## 分支 A 参数
 
 默认参数在 `baseline/main.cpp` 的 `default_config()` 中,也可用上述命令行选项覆盖(单位:mm):
 
@@ -109,6 +126,34 @@ cmake .. && cmake --build .
 | `std_ratio` | `--std-ratio` | 4.0 | 统计滤波标准差倍数阈值 |
 | `cluster_radius` | `--cluster-radius` | 3.0 | 欧氏聚类邻接半径 |
 | `min_cluster_size` | `--min-cluster-size` | 100 | 小于该点数的簇视为游离噪声删除 |
+
+## 分支 B:去台面方案(`tabletop`)
+
+无空环境点云时使用,以"去除工作台平面"代替差分。流程:
+`读取 → [可选 ROI] → 去台面 → 体素下采样 → 统计滤波 → 聚类`。
+
+去台面方法**根据是否提供 z 值自动选择**:
+
+- 给了 `--z-cut <mm>` → **zcut**:直接保留 `z > 该值`(简单、快)。
+- 没给 → **ransac**:自动拟合最大近水平平面并去除,**无需任何高度信息**;可选 `--table-z` 作为提示加速。
+
+```bash
+# 不填 z → RANSAC 自动去台面
+./tabletop --input data/.../wkpc1/merged_pointcloud.pcd --output output/wkpc1_ransac
+
+# 填 z=-42 → zcut
+./tabletop --input data/.../wkpc1/merged_pointcloud.pcd --z-cut -42 --output output/wkpc1_zcut
+```
+
+| 参数 | 命令行 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| 输入点云 | `--input` | 必填 | .pcd / .ply |
+| z 切割高度 | `--z-cut` | 不填 | 填了→zcut;不填→ransac |
+| 台面高度提示 | `--table-z` | 不填 | 仅 ransac,可选 |
+| 平面厚度 | `--plane-thickness` | 5.0 | 仅 ransac |
+| 体素 / 统计滤波 / 聚类 | 同分支 A | — | `--voxel` `--std-ratio` `--keep-largest` 等 |
+
+中间结果输出:`02_no_table.ply` / `03_voxel.ply` / `04_sor.ply` / `05_workpiece_clean.ply`。
 
 ## 测试数据
 
