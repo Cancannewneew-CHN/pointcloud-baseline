@@ -10,6 +10,7 @@ file/*
 # C++ 构建产物
 baseline/build/
 baseline/baseline
+baseline/tabletop
 *.o
 *.obj
 *.out
